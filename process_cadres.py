@@ -284,12 +284,21 @@ def match_department(summary_dept, reverse_mapping):
 def process_and_fill_data(summary_path, annual_path, output_path):
     """
     主处理函数：填充2025年度子表并计算统计数据
+    保留原始表格的合并单元格格式
+    
+    处理逻辑：
+    1. 从2025年度子表获取原始的合并单元格结构和部门名称
+    2. 将原始部门名称映射到汇总表部门名称
+    3. 从汇总表获取部门评价结果
+    4. 从干部年度表获取对应部门的干部名单
+    5. 按照原始结构填充数据
     """
     # 获取部门映射
-    reverse_mapping = get_reverse_mapping()
+    forward_mapping = get_department_mapping()  # 汇总表 -> 干部年度表
+    reverse_mapping = get_reverse_mapping()  # 干部年度表 -> 汇总表
     
-    # 从汇总表获取部门顺序和评价结果
-    departments, eval_results = get_departments_from_summary(summary_path)
+    # 从汇总表获取部门评价结果
+    _, eval_results = get_departments_from_summary(summary_path)
     
     # 读取干部年度数据
     df_annual = read_annual_cadres(annual_path)
@@ -297,44 +306,81 @@ def process_and_fill_data(summary_path, annual_path, output_path):
     # 加载工作簿
     wb = load_workbook(summary_path)
     
-    # 获取或创建2025年度工作表
-    if '2025年度' in wb.sheetnames:
-        ws = wb['2025年度']
-    else:
-        ws = wb.create_sheet('2025年度')
+    # 获取2025年度工作表
+    if '2025年度' not in wb.sheetnames:
+        print("错误：2025年度子表不存在")
+        return {}
     
-    # 清空现有数据（保留表头）
-    # 表头在第1行
-    max_row = ws.max_row
-    for row in range(max_row, 1, -1):
-        ws.delete_rows(row)
+    ws_original = wb['2025年度']
     
-    # 写入表头
-    headers = ['序号', '部门名称', '姓名', '职务', '现职级', '外派']
-    for col, header in enumerate(headers, 1):
-        ws.cell(row=1, column=col, value=header)
+    # 保存原始的合并单元格信息和部门名称
+    original_structure = []  # [(start_row, end_row, original_dept_name)]
+    for merged_range in sorted(ws_original.merged_cells.ranges, key=lambda x: x.min_row):
+        if merged_range.min_col == 2 and merged_range.max_col == 2:
+            start_row = merged_range.min_row
+            end_row = merged_range.max_row
+            # 获取原始的部门名称
+            original_dept_name = ws_original.cell(row=start_row, column=2).value
+            original_structure.append((start_row, end_row, original_dept_name))
     
-    current_row = 2
-    dept_stats = {}  # 用于存储各部门统计数据
+    dept_stats = {}
     
-    # 按照汇总表部门顺序处理
-    for dept_name in departments:
-        # 找到对应的干部年度表部门名称
-        annual_dept = match_department(dept_name, reverse_mapping)
-        
-        if annual_dept is None:
-            print(f"警告：未找到部门 '{dept_name}' 的匹配项")
+    # 遍历原始结构，逐个填充
+    for start_row, end_row, original_dept_name in original_structure:
+        if original_dept_name is None:
             continue
+        
+        cadre_count = end_row - start_row + 1
+        
+        # 尝试将原始部门名称映射到汇总表部门名称
+        # 首先尝试直接反向映射
+        summary_dept = None
+        
+        # 检查是否在正向映射的值中（即干部年度表名称）
+        for summ_dept, annual_dept in forward_mapping.items():
+            if original_dept_name == annual_dept or original_dept_name.startswith(annual_dept):
+                summary_dept = summ_dept
+                break
+        
+        # 如果没找到，尝试模糊匹配
+        if summary_dept is None:
+            for summ_dept, annual_dept in forward_mapping.items():
+                if summ_dept in original_dept_name or annual_dept in original_dept_name:
+                    summary_dept = summ_dept
+                    break
+        
+        # 如果还是没找到，尝试直接使用原名
+        if summary_dept is None:
+            # 检查是否直接就是汇总表部门名称
+            if original_dept_name in forward_mapping or original_dept_name in reverse_mapping:
+                summary_dept = original_dept_name
+        
+        if summary_dept is None:
+            print(f"警告：无法映射部门 '{original_dept_name}'")
+            continue
+        
+        # 获取对应的干部年度表部门名称
+        annual_dept = forward_mapping.get(summary_dept, summary_dept)
         
         # 获取该部门的干部
         dept_cadres = df_annual[df_annual['部门名称'] == annual_dept].copy()
         
+        # 如果没有找到，尝试使用原始部门名称作为年度表部门名称
         if len(dept_cadres) == 0:
-            print(f"提示：部门 '{dept_name}' ({annual_dept}) 没有干部数据")
+            dept_cadres = df_annual[df_annual['部门名称'] == original_dept_name].copy()
+        
+        if len(dept_cadres) == 0:
+            print(f"提示：部门 '{summary_dept}' ({original_dept_name}) 没有干部数据")
+            # 清空该区域
+            ws_original.cell(row=start_row, column=2, value=summary_dept)
             continue
         
         # 按部门职级排序
         dept_cadres = dept_cadres.sort_values('部门职级排序', key=lambda x: pd.to_numeric(x, errors='coerce'))
+        
+        # 只取与合并单元格行数相同的干部数量
+        if len(dept_cadres) > cadre_count:
+            dept_cadres = dept_cadres.head(cadre_count)
         
         # 统计
         total_count = len(dept_cadres)
@@ -342,28 +388,30 @@ def process_and_fill_data(summary_path, annual_path, output_path):
         base_count = total_count - external_count  # 考核基数（不含外派干部）
         
         # 获取评价结果
-        eval_result = eval_results.get(dept_name, '/')
+        eval_result = eval_results.get(summary_dept, '/')
         
         # 计算评优名额
         excellent_quota = calculate_excellent_quota(base_count, eval_result)
         
         # 存储统计数据
-        dept_stats[dept_name] = {
+        dept_stats[summary_dept] = {
             '考核基数': base_count,
             '外派干部人数': external_count,
             '评优名额': excellent_quota,
             '评价结果': eval_result
         }
         
-        # 写入干部明细
-        for _, cadre in dept_cadres.iterrows():
-            ws.cell(row=current_row, column=1, value=cadre['序号'])
-            ws.cell(row=current_row, column=2, value=dept_name if current_row == 2 or ws.cell(row=current_row-1, column=2).value != dept_name else None)
-            ws.cell(row=current_row, column=3, value=cadre['姓名'])
-            ws.cell(row=current_row, column=4, value=cadre['职务'])
-            ws.cell(row=current_row, column=5, value=cadre['现职级'])
-            ws.cell(row=current_row, column=6, value=cadre['外派'] if pd.notna(cadre['外派']) else None)
-            current_row += 1
+        # 填充部门名称（只在第一个单元格填写）
+        ws_original.cell(row=start_row, column=2, value=summary_dept)
+        
+        # 填充干部信息
+        for i, (_, cadre) in enumerate(dept_cadres.iterrows()):
+            row = start_row + i
+            ws_original.cell(row=row, column=1, value=cadre['序号'])
+            ws_original.cell(row=row, column=3, value=cadre['姓名'])
+            ws_original.cell(row=row, column=4, value=cadre['职务'])
+            ws_original.cell(row=row, column=5, value=cadre['现职级'])
+            ws_original.cell(row=row, column=6, value=cadre['外派'] if cadre['外派'] else None)
     
     # 保存文件
     wb.save(output_path)

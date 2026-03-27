@@ -1,1 +1,34 @@
-Nothing should be ignored in this case, as the added files are only source code (.py) and a data file (.xlsx), with no build artifacts, dependencies, or temporary files present in the changes.
+```
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.ENV
+.env
+.env.*
+.venv.bak
+env.bak
+.python-version
+
+# Generated files
+*.xlsx
+*.xls
+*.csv
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+```
