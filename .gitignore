@@ -1,0 +1,1 @@
+Nothing should be ignored in this case, as the added files are only source code (.py) and a data file (.xlsx), with no build artifacts, dependencies, or temporary files present in the changes.
