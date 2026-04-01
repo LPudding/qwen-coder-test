@@ -113,8 +113,9 @@ def calculate_excellent_quota(count, evaluation_result):
     根据 rule.md 的规则计算评优名额
     
     参数:
-        count: 干部人数
-        evaluation_result: 领导班子评价结果 (优秀/良好/一般及以下)
+        count: 干部人数（考核基数，不含外派干部）
+        evaluation_result: 领导班子评价结果 (优秀/良好/A/B/一般及以下)
+                          A=优秀，B=良好
     
     返回:
         评优名额
@@ -122,8 +123,16 @@ def calculate_excellent_quota(count, evaluation_result):
     if count <= 0:
         return 0
     
+    # 标准化评价结果：A=优秀，B=良好
+    if evaluation_result == 'A':
+        eval_normalized = '优秀'
+    elif evaluation_result == 'B':
+        eval_normalized = '良好'
+    else:
+        eval_normalized = evaluation_result
+    
     # 确定评价等级
-    if evaluation_result in ['优秀', '良好']:
+    if eval_normalized in ['优秀', '良好']:
         level = 'good'  # 优秀或良好
     else:
         level = 'bad'  # 一般及以下
@@ -140,59 +149,59 @@ def calculate_excellent_quota(count, evaluation_result):
         else:
             return 0
     elif 4 <= count <= 6:
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return 2
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return 1
         else:
             return 0
     elif 7 <= count <= 10:
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return 3
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return 2
         else:
             return 1
     elif 11 <= count <= 13:
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return 4
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return 3
         else:
             return 1
     elif 14 <= count <= 16:
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return 5
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return 4
         else:
             return 2
     elif 17 <= count <= 19:
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return 6
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return 5
         else:
             return 2
     elif 20 <= count <= 22:
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return 7
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return 6
         else:
             return 3
     elif 23 <= count <= 25:
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return 8
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return 7
         else:
             return 3
     else:
         # 超过25人的情况，按规则外推
-        if evaluation_result == '优秀':
+        if eval_normalized == '优秀':
             return min(count // 3, count)
-        elif evaluation_result == '良好':
+        elif eval_normalized == '良好':
             return min(count // 3, count - 1)
         else:
             return min(count // 8, count)
@@ -292,6 +301,7 @@ def process_and_fill_data(summary_path, annual_path, output_path):
     3. 从汇总表获取部门评价结果
     4. 从干部年度表获取对应部门的干部名单
     5. 按照原始结构填充数据
+    6. 同时填充结果汇总表的D、E、F、G列（考核基数、外派干部、评优名额、评优人数）
     """
     # 获取部门映射
     forward_mapping = get_department_mapping()  # 汇总表 -> 干部年度表
@@ -312,6 +322,7 @@ def process_and_fill_data(summary_path, annual_path, output_path):
         return {}
     
     ws_original = wb['2025年度']
+    ws_summary = wb['结果汇总表']
     
     # 保存原始的合并单元格信息和部门名称
     original_structure = []  # [(start_row, end_row, original_dept_name)]
@@ -412,6 +423,28 @@ def process_and_fill_data(summary_path, annual_path, output_path):
             ws_original.cell(row=row, column=4, value=cadre['职务'])
             ws_original.cell(row=row, column=5, value=cadre['现职级'])
             ws_original.cell(row=row, column=6, value=cadre['外派'] if cadre['外派'] else None)
+    
+    # 填充结果汇总表的D、E、F列
+    # 遍历结果汇总表中的数据行
+    category_titles = ['综合型部门', '专业型部门', '支撑型部门', '监督型部门', 
+                       '直属供电局', '其他直属单位——生产调度运维组',
+                       '其他直属单位——生产服务支撑组', '其他直属单位——营销服务支撑组',
+                       '参控股公司']
+    
+    for row in range(5, ws_summary.max_row + 1):
+        dept_name = ws_summary.cell(row=row, column=2).value
+        
+        if dept_name and dept_name not in category_titles:
+            if dept_name in dept_stats:
+                stats = dept_stats[dept_name]
+                # D列：考核基数（不含外派干部）
+                ws_summary.cell(row=row, column=4, value=stats['考核基数'])
+                # E列：外派干部(不占名额)
+                ws_summary.cell(row=row, column=5, value=stats['外派干部人数'])
+                # F列：评优名额（根据公式计算）
+                ws_summary.cell(row=row, column=6, value=stats['评优名额'])
+                # G列：评优人数（暂时填0，因为这是实际评优情况，需要后续填写）
+                ws_summary.cell(row=row, column=7, value=0)
     
     # 保存文件
     wb.save(output_path)
